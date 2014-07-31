@@ -161,7 +161,7 @@ static void *rtmp_readstream(void *data);
 
 static int rtmp_send_audio(struct rtmp_pvt *p, struct ast_frame *frame); 
 
-static int rtmp_send_video(struct rtmp_pvt *p, struct ast_frame *frame); 
+//static int rtmp_send_video(struct rtmp_pvt *p, struct ast_frame *frame); 
 
 static int rtmp_handle_apacket(struct rtmp_pvt *p, RTMPPacket *packet);
 
@@ -736,9 +736,9 @@ static struct ast_frame *rtmp_read(struct ast_channel *ast) {
 	int res;
 	static struct ast_frame f;
 	
-	if (!buf) {
+	/*if (!buf) {   ==> commented shishir buf is always true
 		return NULL;
-	}
+	}*/
 
 	f.frametype = AST_FRAME_NULL;
 	f.subclass.codec = 0;
@@ -863,7 +863,7 @@ static int rtmp_handle_apacket(struct rtmp_pvt *p, RTMPPacket *packet) {
 		sample_fmt_in = 16;
 	} else {
 		sample_fmt_in = 8;
-	}
+	} 
 	sample_fmt_out = 8;
 
 	ast_debug(7, "Audio type : %s\n", (*firstbyte & 0x01) >> 0 ? "stereo" : "mono");
@@ -916,6 +916,7 @@ static int rtmp_handle_apacket(struct rtmp_pvt *p, RTMPPacket *packet) {
 	}
 
 	len = avcodec_decode_audio3(p->decoding_context, (int16_t *) rawsamples, &rawsampleslen,  packet);
+
 	if (inputrate != p->rtmpinputrate) {
 		/* incoming audio packets are not sampled at the expected rate
 		 * so let's reinitialize the sampling context */
@@ -946,7 +947,7 @@ safeout:
 
 
 
-/*
+/* 
 *
 *
 * hangup and destroy RTMP channel
@@ -1085,9 +1086,12 @@ static int load_module(void)
 
 	
 
-	/* must be called before using avcodec lib */
+	/* must be called before using avcodec lib 
+	
+	avcodec_init() is deprecialted it is call automatically from avodec_register_all();
 	ast_verbose(VERBOSE_PREFIX_3 "Initializing avcodec\n");	
 	avcodec_init();
+	*/
 
 
 	/* register all the codecs */
