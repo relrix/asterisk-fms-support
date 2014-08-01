@@ -161,7 +161,7 @@ static void *rtmp_readstream(void *data);
 
 static int rtmp_send_audio(struct rtmp_pvt *p, struct ast_frame *frame); 
 
-//static int rtmp_send_video(struct rtmp_pvt *p, struct ast_frame *frame); 
+static int rtmp_send_video(struct rtmp_pvt *p, struct ast_frame *frame) {
 
 static int rtmp_handle_apacket(struct rtmp_pvt *p, RTMPPacket *packet);
 
@@ -251,7 +251,7 @@ static struct rtmp_pvt *rtmp_alloc(char *writestream, char *readstream, char *re
 	p->tortmp_resample_context = av_audio_resample_init(
 			
 			1, 1,
-			p->rtmpinputrate, p->astinputrate,
+			44100, p->astinputrate,
 			AV_SAMPLE_FMT_S16 , AV_SAMPLE_FMT_S16 ,
 			16, 10, 1, 0.8
 
@@ -351,9 +351,9 @@ static struct ast_channel *rtmp_new(struct rtmp_pvt *p, int state, const char *l
 
 	p->owner = tmp;
 
-	ast_verbose(VERBOSE_PREFIX_3 "Finding encoder %d\n",CODEC_ID_PCM_S16LE);
+	ast_verbose(VERBOSE_PREFIX_3 "Finding encoder %d\n",CODEC_ID_MP3);
 
-	p->encoder = avcodec_find_encoder(CODEC_ID_PCM_S16LE);
+	p->encoder = avcodec_find_encoder(CODEC_ID_MP3);
 
 	if (!p->encoder)
 	{
@@ -364,13 +364,22 @@ static struct ast_channel *rtmp_new(struct rtmp_pvt *p, int state, const char *l
 
 	ast_verbose(VERBOSE_PREFIX_3 "Allocating context\n");
 
-	p->encoding_context = avcodec_alloc_context3(NULL);
+	p->encoding_context = avcodec_alloc_context3(p->encoder );
 	
-	p->encoding_context->channels = 1;
+	/* put sample parameters */
+    p->encoding_context->bit_rate = 320000;
 
-	p->encoding_context->sample_fmt = AV_SAMPLE_FMT_S16 ;
+    p->encoding_context->sample_rate = 44100;
 
-	p->encoding_context->sample_rate = 11000;
+    p->encoding_context->channels = 1;
+
+	//p->encoding_context->sample_fmt = 8;//AV_SAMPLE_FMT_S16 ;
+
+	//p->encoding_context->channels = 1;
+
+	p->encoding_context->sample_fmt = AV_SAMPLE_FMT_S16;
+
+	//p->encoding_context->sample_rate = 11000;
 
 	if (avcodec_open2(p->encoding_context, p->encoder, NULL) < 0) 
 	{
@@ -560,7 +569,7 @@ static int rtmp_write(struct ast_channel *ast, struct ast_frame *frame)
 	{
 		
 		ast_log(LOG_DEBUG, "I GOT A VIDEO FRAME, Not Implemented yet\n");
-	//	res = rtmp_send_video(p, frame);	
+		res = rtmp_send_video(p, frame);	
 
 		
 	}
@@ -596,11 +605,17 @@ static int rtmp_write(struct ast_channel *ast, struct ast_frame *frame)
 static int rtmp_send_audio(struct rtmp_pvt *p, struct ast_frame *frame) {
 	int res = -1;
 	uint8_t *input = NULL;
+	//uint8_t *resampleinput = NULL;
 	short rawsamples[AVCODEC_MAX_AUDIO_FRAME_SIZE];
+	short resampleinput[AVCODEC_MAX_AUDIO_FRAME_SIZE];
 	//uint8_t samples[1024];
 	uint8_t *buf;
 	int len = 0, inputlen;
 	char pbuf[1024];
+
+	int framesize,outbuf_size,outbuf,out_size ;
+	short *samples;
+
 	RTMPPacket packet = { 0 };
 
 	packet.m_nChannel = 0x06;
@@ -613,27 +628,153 @@ static int rtmp_send_audio(struct rtmp_pvt *p, struct ast_frame *frame) {
 
 	buf = (uint8_t *)packet.m_body;
 
+//p->encoding_context
+
 	inputlen = frame->datalen;
 	input = ast_malloc(inputlen);
 	memcpy(input, frame->data.ptr, inputlen);
+
 
 	len = audio_resample(p->tortmp_resample_context, rawsamples, (short *)input, inputlen/2);
 
 	//len = avcodec_encode_audio(p->encoding_context, samples, len*2, rawsamples);
 	//ast_debug(3, "samples size = %d\n", len);
 
-	*buf++ = 6;
-	memcpy(buf, rawsamples, len*2);
-	//memcpy(buf, input, inputlen);
+						*buf++ =14; // Control: 0x0e (Uncompressed 44 kHz 16 bit mono)
+									memcpy(buf, rawsamples, len*2);
+									//memcpy(buf, input, inputlen);
 
-	packet.m_nBodySize = len*2 + 1;
-	//packet.m_nBodySize = inputlen + 1;
+									packet.m_nBodySize = len*2 + 1;
+								
+									res = RTMP_SendPacket(p->rtmpout, &packet, 0);
 
-	res = RTMP_SendPacket(p->rtmpout, &packet, 0);
+									ast_free(input);
 
-	ast_free(input);
+
+						
+/*
+resamples to mp3 but there is a noise on the audio ...
+		outbuf_size = 10000;
+		outbuf = ast_malloc(outbuf_size);
+
+		out_size = avcodec_encode_audio(p->encoding_context, outbuf, outbuf_size, (short *)rawsamples);
+
+			//*buf++ = 0x0004; //which codec 
+			*buf++ = 46; //46 = mp3 44khz mono
+			//*buf++ = 20; Control: 0x14 (ADPCM 11 kHz 8 bit mono)
+			//*buf++ = 42; Control: 0x2a (MP3 22 kHz 16 bit mono)
+			//*buf++ = 65; Control: 0x41 (Nellymoser 16kHz 5.5 kHz 8 bit stereo)
+			//*buf++ = 101; Control: 0x65 (Nellymoser 11 kHz 8 bit stereo)
+			//*buf++ = 14; Control: 0x0e (Uncompressed 44 kHz 16 bit mono)
+			//*buf++ = 100;
+
+			memcpy(buf, outbuf, out_size*2);
+
+			packet.m_nBodySize = out_size+1;
+
+			res = RTMP_SendPacket(p->rtmpout, &packet, 0);
+
+			ast_free(input);
+			ast_free(outbuf);
+*/
 	return res;
 }
+
+
+
+
+
+/*
+*
+*
+*
+*	Create and send rtmp packet
+*
+*
+*
+*
+*/
+
+
+
+static int rtmp_send_video(struct rtmp_pvt *p, struct ast_frame *frame) {
+	int res = -1;
+	uint8_t *input = NULL;
+	//uint8_t *resampleinput = NULL;
+	short rawsamples[AVCODEC_MAX_AUDIO_FRAME_SIZE];
+	short resampleinput[AVCODEC_MAX_AUDIO_FRAME_SIZE];
+	//uint8_t samples[1024];
+	uint8_t *buf;
+	int len = 0, inputlen;
+	char pbuf[1024];
+
+	int framesize,outbuf_size,outbuf,out_size ;
+	short *samples;
+
+	RTMPPacket packet = { 0 };
+
+	packet.m_nChannel = 0x06;
+	packet.m_headerType = RTMP_PACKET_SIZE_LARGE;
+	packet.m_packetType = RTMP_PACKET_TYPE_AUDIO;
+	packet.m_nTimeStamp = (time(NULL) * 1000) -  p->timestamp;
+	packet.m_nInfoField2 = p->rtmpout->m_stream_id;
+	packet.m_hasAbsTimestamp = 0;
+	packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+	buf = (uint8_t *)packet.m_body;
+
+//p->encoding_context
+
+	inputlen = frame->datalen;
+	input = ast_malloc(inputlen);
+	memcpy(input, frame->data.ptr, inputlen);
+
+
+	len = audio_resample(p->tortmp_resample_context, rawsamples, (short *)input, inputlen/2);
+
+	//len = avcodec_encode_audio(p->encoding_context, samples, len*2, rawsamples);
+	//ast_debug(3, "samples size = %d\n", len);
+
+						*buf++ =14; // Control: 0x0e (Uncompressed 44 kHz 16 bit mono)
+									memcpy(buf, rawsamples, len*2);
+									//memcpy(buf, input, inputlen);
+
+									packet.m_nBodySize = len*2 + 1;
+								
+									res = RTMP_SendPacket(p->rtmpout, &packet, 0);
+
+									ast_free(input);
+
+
+						
+/*
+resamples to mp3 but there is a noise on the audio ...
+		outbuf_size = 10000;
+		outbuf = ast_malloc(outbuf_size);
+
+		out_size = avcodec_encode_audio(p->encoding_context, outbuf, outbuf_size, (short *)rawsamples);
+
+			//*buf++ = 0x0004; //which codec 
+			*buf++ = 46; //46 = mp3 44khz mono
+			//*buf++ = 20; Control: 0x14 (ADPCM 11 kHz 8 bit mono)
+			//*buf++ = 42; Control: 0x2a (MP3 22 kHz 16 bit mono)
+			//*buf++ = 65; Control: 0x41 (Nellymoser 16kHz 5.5 kHz 8 bit stereo)
+			//*buf++ = 101; Control: 0x65 (Nellymoser 11 kHz 8 bit stereo)
+			//*buf++ = 14; Control: 0x0e (Uncompressed 44 kHz 16 bit mono)
+			//*buf++ = 100;
+
+			memcpy(buf, outbuf, out_size*2);
+
+			packet.m_nBodySize = out_size+1;
+
+			res = RTMP_SendPacket(p->rtmpout, &packet, 0);
+
+			ast_free(input);
+			ast_free(outbuf);
+*/
+	return res;
+}
+
 
 
 
